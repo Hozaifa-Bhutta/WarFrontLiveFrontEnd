@@ -2,10 +2,13 @@ const DATA_URL = 'https://warfrontlivebackend.onrender.com/tagged_messages.json'
 const CACHE_URL = 'https://warfrontlivebackend.onrender.com/location_cache.json';
 let map;
 let markerClusterGroup;
-let rectangleLayerGroup; // New layer group for rectangles
+let rectangleLayerGroup; // New layer group for rectangles (kept for backward compatibility)
+let regionMarkersGroup; // New layer group for region markers
 
 const messageStore = {};
+const regionStore = {}; // Store region data for quick lookup
 let nextMsgId = 0;
+let nextRegionId = 0;
 let allMessages = [];  // store all messages loaded from file
 let locationCache = {}; // store location coordinates from cache.json
 let filteredEventsMessages = []; // for events view filtering
@@ -29,6 +32,9 @@ async function initMap() {
   // Create layer group for rectangles (bounding boxes)
   rectangleLayerGroup = L.layerGroup();
   
+  // Create layer group for region markers
+  regionMarkersGroup = L.layerGroup();
+  
   // Add custom click handler for clusters
   markerClusterGroup.on('clusterclick', function(event) {
     // Prevent default zoom behavior
@@ -44,6 +50,7 @@ async function initMap() {
   
   map.addLayer(markerClusterGroup);
   map.addLayer(rectangleLayerGroup);
+  map.addLayer(regionMarkersGroup);
 
   // Add zoom event listener for dynamic region visibility
   map.on('zoomend', updateRegionVisibility);
@@ -174,10 +181,13 @@ function onLayerToggle() {
   }
   
   if (showRegions) {
-    map.addLayer(rectangleLayerGroup);
-    updateRegionVisibility(); // Update visibility based on current zoom
+    map.addLayer(regionMarkersGroup);
+    // Keep rectangles hidden for now, we're using region markers instead
+    // map.addLayer(rectangleLayerGroup);
+    // updateRegionVisibility(); // Update visibility based on current zoom
   } else {
-    map.removeLayer(rectangleLayerGroup);
+    map.removeLayer(regionMarkersGroup);
+    // map.removeLayer(rectangleLayerGroup);
   }
 }
 
@@ -279,8 +289,11 @@ function updateRegionVisibility() {
 function refreshMarkers(messages) {
   markerClusterGroup.clearLayers();
   rectangleLayerGroup.clearLayers();
+  regionMarkersGroup.clearLayers();
   Object.keys(messageStore).forEach(k => delete messageStore[k]);
+  Object.keys(regionStore).forEach(k => delete regionStore[k]);
   nextMsgId = 0;
+  nextRegionId = 0;
 
   messages.forEach(msg => {
     if (!msg.locations || msg.locations.length === 0) return;
@@ -328,22 +341,85 @@ function addLocationToMap(coord, msg, locationName) {
 
   // Check if it's a bounding box (has north, south, east, west) or point coordinates (has lat, lon)
   if (coord.north !== undefined && coord.south !== undefined && coord.east !== undefined && coord.west !== undefined) {
-    // It's a bounding box - create a rectangle
-    const bounds = [
-      [coord.south, coord.west], // Southwest corner
-      [coord.north, coord.east]  // Northeast corner
-    ];
+    // It's a bounding box - create or update a region marker
+    const centerLat = (coord.north + coord.south) / 2;
+    const centerLon = (coord.east + coord.west) / 2;
     
-    const rectangle = L.rectangle(bounds, {
-      color: '#6366f1',
-      weight: 2,
-      opacity: 0.8,
-      fillColor: '#6366f1',
-      fillOpacity: 0.2
-    });
+    // Check if we already have a region for this location
+    const existingRegionId = Object.keys(regionStore).find(id => 
+      regionStore[id].name === locationName && 
+      regionStore[id].bounds.north === coord.north &&
+      regionStore[id].bounds.south === coord.south &&
+      regionStore[id].bounds.east === coord.east &&
+      regionStore[id].bounds.west === coord.west
+    );
     
-    rectangle.bindPopup(popupContent);
-    rectangleLayerGroup.addLayer(rectangle); // Add to rectangle layer group
+    if (existingRegionId) {
+      // Add message to existing region
+      regionStore[existingRegionId].messages.push(msg);
+      // Update the region marker tooltip to reflect new count
+      updateRegionMarker(existingRegionId);
+    } else {
+      // Create new region
+      const regionId = `region_${nextRegionId++}`;
+      
+      // Store region data for lookup
+      regionStore[regionId] = {
+        name: locationName,
+        bounds: {
+          north: coord.north,
+          south: coord.south,
+          east: coord.east,
+          west: coord.west
+        },
+        messages: [msg],
+        center: [centerLat, centerLon]
+      };
+      
+      // Create a custom colored marker for regions
+      const regionIcon = L.divIcon({
+        className: 'region-marker',
+        html: `<div class="region-marker-icon" style="background-color: #ff6b35; border: 2px solid #fff; border-radius: 50%; width: 18px; height: 18px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);"></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
+      });
+      
+      const regionMarker = L.marker([centerLat, centerLon], { icon: regionIcon });
+      
+      // Store reference to marker for updates
+      regionStore[regionId].marker = regionMarker;
+      
+      // Add click handler to show all messages in the region
+      regionMarker.on('click', function() {
+        showRegionDetails(regionId);
+      });
+      
+      // Add tooltip showing region name
+      regionMarker.bindTooltip(`📍 ${locationName} (1 message)`, {
+        permanent: false,
+        direction: 'top',
+        offset: [0, -10]
+      });
+      
+      regionMarkersGroup.addLayer(regionMarker);
+      
+      // Also keep the rectangle for potential future use (but hidden)
+      const bounds = [
+        [coord.south, coord.west], // Southwest corner
+        [coord.north, coord.east]  // Northeast corner
+      ];
+      
+      const rectangle = L.rectangle(bounds, {
+        color: '#6366f1',
+        weight: 2,
+        opacity: 0,
+        fillColor: '#6366f1',
+        fillOpacity: 0
+      });
+      
+      rectangle.bindPopup(popupContent);
+      rectangleLayerGroup.addLayer(rectangle); // Add to rectangle layer group (hidden)
+    }
   } else if (coord.lat !== undefined && coord.lon !== undefined) {
     // It's point coordinates - create a marker
     const marker = L.marker([coord.lat, coord.lon]);
@@ -352,6 +428,155 @@ function addLocationToMap(coord, msg, locationName) {
   } else {
     console.warn('Invalid coordinate format for location "' + locationName + '":', coord);
   }
+}
+
+function updateRegionMarker(regionId) {
+  const region = regionStore[regionId];
+  if (!region || !region.marker) return;
+  
+  const messageCount = region.messages.length;
+  
+  // Choose color based on message count
+  let color = '#ff6b35'; // default orange
+  let activityClass = '';
+  
+  if (messageCount >= 10) {
+    color = '#dc2626'; // red for high activity
+    activityClass = 'high-activity';
+  } else if (messageCount >= 5) {
+    color = '#f59e0b'; // amber for medium activity
+  }
+  
+  // Update the marker icon
+  const regionIcon = L.divIcon({
+    className: 'region-marker',
+    html: `<div class="region-marker-icon ${activityClass}" style="background-color: ${color}; border: 2px solid #fff; border-radius: 50%; width: 18px; height: 18px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);"></div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11]
+  });
+  
+  region.marker.setIcon(regionIcon);
+  
+  // Update tooltip
+  const plural = messageCount === 1 ? 'message' : 'messages';
+  region.marker.setTooltipContent(`📍 ${region.name} (${messageCount} ${plural})`);
+}
+
+function showRegionDetails(regionId) {
+  const region = regionStore[regionId];
+  if (!region) return;
+
+  // Find all messages within this region's bounds (including sub-regions)
+  const messagesInRegion = findMessagesInRegion(region.bounds);
+  
+  // Get unique channels from all messages
+  const channels = [...new Set(messagesInRegion.map(msg => msg.channel))];
+  
+  document.getElementById('details-title').textContent = `Region: ${region.name}`;
+  
+  let content = `
+    <div class="region-details">
+      <div class="region-info">
+        <strong>Region:</strong> ${region.name}<br>
+        <strong>Total Messages:</strong> ${messagesInRegion.length}<br>
+        <strong>Channels:</strong> ${channels.join(', ')}<br>
+        <strong>Coordinates:</strong> ${region.center[0].toFixed(4)}, ${region.center[1].toFixed(4)}<br>
+        <strong>Coverage:</strong> ${((region.bounds.north - region.bounds.south) * 111).toFixed(1)}km × ${((region.bounds.east - region.bounds.west) * 111 * Math.cos(region.center[0] * Math.PI / 180)).toFixed(1)}km
+      </div>
+      <div class="region-messages">
+        <h4>Messages in this region (showing most recent first):</h4>
+  `;
+  
+  if (messagesInRegion.length === 0) {
+    content += '<p>No messages found in this region.</p>';
+  } else {
+    messagesInRegion.slice(0, 15).forEach((msg, index) => {
+      const date = new Date(msg.date).toLocaleString();
+      const relativeDate = getRelativeTime(msg.date);
+      content += `
+        <div class="message-item" style="margin-bottom: 10px; padding: 8px; border-left: 3px solid #ff6b35; background: #f9f9f9;">
+          <div class="message-text" style="font-size: 0.9em; margin-bottom: 4px;">${msg.cleaned_text || msg.text}</div>
+          <div class="message-meta" style="font-size: 0.8em; color: #666;">
+            <strong>Channel:</strong> ${msg.channel} | 
+            <strong>Date:</strong> ${relativeDate} (${date})
+            ${msg.locations ? ` | <strong>Locations:</strong> ${msg.locations.join(', ')}` : ''}
+          </div>
+        </div>
+      `;
+    });
+    
+    if (messagesInRegion.length > 15) {
+      content += `<p style="color: #666; font-style: italic;">... and ${messagesInRegion.length - 15} more messages</p>`;
+    }
+  }
+  
+  content += '</div></div>';
+  
+  document.getElementById('details-content').innerHTML = content;
+  document.getElementById('details').style.display = 'block';
+}
+
+function getRelativeTime(dateString) {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  } else if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  } else if (diffDays < 7) {
+    return `${diffDays}d ago`;
+  } else {
+    return `${Math.floor(diffDays / 7)}w ago`;
+  }
+}
+
+function findMessagesInRegion(regionBounds) {
+  const messagesInRegion = [];
+  
+  // Check all stored messages
+  Object.values(messageStore).forEach(msg => {
+    if (!msg.locations) return;
+    
+    msg.locations.forEach(location => {
+      const locationKey = location.trim().toLowerCase();
+      const coord = locationCache[locationKey];
+      
+      if (!coord) return;
+      
+      // Check if this location is within the region bounds
+      if (isLocationInBounds(coord, regionBounds)) {
+        // Avoid duplicates
+        if (!messagesInRegion.find(m => m.id === msg.id || (m.text === msg.text && m.date === msg.date))) {
+          messagesInRegion.push(msg);
+        }
+      }
+    });
+  });
+  
+  return messagesInRegion.sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+function isLocationInBounds(coord, bounds) {
+  // Handle point coordinates
+  if (coord.lat !== undefined && coord.lon !== undefined) {
+    return coord.lat >= bounds.south && coord.lat <= bounds.north &&
+           coord.lon >= bounds.west && coord.lon <= bounds.east;
+  }
+  
+  // Handle bounding box coordinates (sub-regions)
+  if (coord.north !== undefined && coord.south !== undefined && 
+      coord.east !== undefined && coord.west !== undefined) {
+    // Check if the sub-region overlaps with the main region
+    return !(coord.south > bounds.north || coord.north < bounds.south ||
+             coord.west > bounds.east || coord.east < bounds.west);
+  }
+  
+  return false;
 }
 
 function showDetailsFromStore(msgId) {

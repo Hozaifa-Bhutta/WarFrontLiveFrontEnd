@@ -562,3 +562,70 @@ body, html {
   color: #6b7280;
   font-size: 1.1rem;
 }
+
+/* Region Marker Styles */
+.region-marker {
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer;
+}
+
+.region-marker-icon {
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.region-marker-icon.high-activity {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 107, 53, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(255, 107, 53, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 107, 53, 0);
+  }
+}
+
+.region-marker:hover .region-marker-icon {
+  transform: scale(1.3);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+
+.region-details {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.region-info {
+  background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+  padding: 16px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  border-left: 5px solid #ff6b35;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.region-messages h4 {
+  color: #374151;
+  margin-bottom: 16px;
+  font-weight: 600;
+  border-bottom: 2px solid #e5e7eb;
+  padding-bottom: 8px;
+}
+
+.message-item {
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  border: 1px solid #e5e7eb;
+}
+
+.message-item:hover {
+  transform: translateX(6px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  border-color: #ff6b35;
+}
