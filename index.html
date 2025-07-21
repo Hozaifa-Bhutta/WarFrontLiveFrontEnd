@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Messages Map with Details Widget, Clustering & Date Filter</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Navigation -->
+  <div class="nav-container">
+    <button class="nav-toggle" onclick="toggleView()" id="view-toggle">
+      📅 Switch to Events Timeline
+    </button>
+  </div>
+
+  <!-- Loading indicator -->
+  <div id="loading">Loading map and markers…</div>
+
+  <!-- Map View -->
+  <div class="view-container active" id="map-view">
+    <!-- Date Filter UI -->
+    <div id="filter-container">
+      <label for="start-date">Start date:</label>
+      <input type="date" id="start-date" />
+      <label for="end-date">End date:</label>
+      <input type="date" id="end-date" />
+      <button id="clear-filter">Clear Filter</button>
+      
+      <!-- Layer Toggle Controls -->
+      <div style="border-left: 2px solid #e5e7eb; padding-left: 1rem; margin-left: 1rem;">
+        <label style="margin-right: 0.5rem;">Show:</label>
+        <label style="margin-right: 1rem; cursor: pointer;">
+          <input type="checkbox" id="show-markers" checked style="margin-right: 0.3rem;">
+          Markers
+        </label>
+        <label style="cursor: pointer;">
+          <input type="checkbox" id="show-regions" checked style="margin-right: 0.3rem;">
+          Regions
+        </label>
+      </div>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Details Widget -->
+    <div id="details">
+      <h3 id="details-title">Message Details</h3>
+      <div id="details-content"></div>
+      <button onclick="document.getElementById('details').style.display='none'">Close</button>
+    </div>
+  </div>
+
+  <!-- Events View -->
+  <div class="view-container events-view" id="events-view">
+    <div class="events-container">
+      <div class="events-header">
+        <h1>Events Timeline</h1>
+        <p>Chronological view of all messages and events</p>
+      </div>
+
+      <div class="events-controls">
+        <label for="events-start-date">Start Date:</label>
+        <input type="date" id="events-start-date" onchange="applyEventsFilters()" />
+        
+        <label for="events-end-date">End Date:</label>
+        <input type="date" id="events-end-date" onchange="applyEventsFilters()" />
+        
+        <label for="events-channel-filter">Channel:</label>
+        <select id="events-channel-filter" onchange="applyEventsFilters()">
+          <option value="">All Channels</option>
+        </select>
+        
+        <label for="events-search-text">Search:</label>
+        <input type="text" id="events-search-text" placeholder="Search messages, locations, channels... (supports partial & fuzzy matching)" oninput="applyEventsFilters()" />
+        
+        <button onclick="applyEventsFilters()">Apply Filters</button>
+        <button class="clear-btn" onclick="clearEventsFilters()">Clear All</button>
+      </div>
+
+      <div class="events-stats" id="events-stats">
+        Loading events...
+      </div>
+
+      <div class="events-timeline" id="events-timeline">
+        <!-- Events will be populated here -->
+      </div>
+
+      <div class="no-events" id="no-events" style="display: none;">
+        <h3>No events found</h3>
+        <p>Try adjusting your filters or date range to see more events.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
