@@ -13,6 +13,7 @@ let allMessages = [];  // store all messages loaded from file
 let locationCache = {}; // store location coordinates from cache.json
 let filteredEventsMessages = []; // for events view filtering
 let currentView = 'map'; // track current view
+let currentSelectedRegion = null; // Track currently selected region
 
 document.addEventListener('DOMContentLoaded', initMap);
 
@@ -49,11 +50,23 @@ async function initMap() {
   });
   
   map.addLayer(markerClusterGroup);
-  map.addLayer(rectangleLayerGroup);
+  // Don't add rectangle layer by default - we'll add it only when needed
+  // map.addLayer(rectangleLayerGroup); // Always add rectangle layer for bounding boxes
   map.addLayer(regionMarkersGroup);
 
   // Add zoom event listener for dynamic region visibility
   map.on('zoomend', updateRegionVisibility);
+  
+  // Add click handler to hide bounding box when clicking elsewhere on map
+  map.on('click', function(e) {
+    // Only hide if we didn't click on a marker
+    if (!e.originalEvent.target.closest('.leaflet-marker-icon') && 
+        !e.originalEvent.target.closest('.leaflet-popup')) {
+      if (currentSelectedRegion) {
+        closeDetails();
+      }
+    }
+  });
 
   try {
     // Add cache-busting parameter to prevent stale data
@@ -182,12 +195,20 @@ function onLayerToggle() {
   
   if (showRegions) {
     map.addLayer(regionMarkersGroup);
-    // Keep rectangles hidden for now, we're using region markers instead
-    // map.addLayer(rectangleLayerGroup);
-    // updateRegionVisibility(); // Update visibility based on current zoom
+    // Ensure rectangle layer is available but don't show rectangles by default
+    if (!map.hasLayer(rectangleLayerGroup)) {
+      map.addLayer(rectangleLayerGroup);
+    }
   } else {
     map.removeLayer(regionMarkersGroup);
-    // map.removeLayer(rectangleLayerGroup);
+    // Hide any selected region when regions are toggled off
+    if (currentSelectedRegion) {
+      closeDetails();
+    }
+    // Remove rectangle layer when regions are disabled
+    if (map.hasLayer(rectangleLayerGroup)) {
+      map.removeLayer(rectangleLayerGroup);
+    }
   }
 }
 
@@ -294,6 +315,7 @@ function refreshMarkers(messages) {
   Object.keys(regionStore).forEach(k => delete regionStore[k]);
   nextMsgId = 0;
   nextRegionId = 0;
+  currentSelectedRegion = null; // Reset selected region
 
   messages.forEach(msg => {
     if (!msg.locations || msg.locations.length === 0) return;
@@ -324,8 +346,8 @@ function refreshMarkers(messages) {
     });
   });
   
-  // Update region visibility after all regions are added
-  updateRegionVisibility();
+  // Don't update region visibility for rectangles - we handle them manually now
+  // updateRegionVisibility();
 }
 
 function addLocationToMap(coord, msg, locationName) {
@@ -403,19 +425,22 @@ function addLocationToMap(coord, msg, locationName) {
       
       regionMarkersGroup.addLayer(regionMarker);
       
-      // Also keep the rectangle for potential future use (but hidden)
+      // Also keep the rectangle for potential future use (but hidden by default)
       const bounds = [
         [coord.south, coord.west], // Southwest corner
         [coord.north, coord.east]  // Northeast corner
       ];
       
       const rectangle = L.rectangle(bounds, {
-        color: '#6366f1',
-        weight: 2,
-        opacity: 0,
-        fillColor: '#6366f1',
-        fillOpacity: 0
+        color: '#ff6b35',
+        weight: 3,
+        opacity: 0, // Hidden by default
+        fillColor: '#ff6b35',
+        fillOpacity: 0 // Hidden by default
       });
+      
+      // Store reference to rectangle in region data
+      regionStore[regionId].rectangle = rectangle;
       
       rectangle.bindPopup(popupContent);
       rectangleLayerGroup.addLayer(rectangle); // Add to rectangle layer group (hidden)
@@ -466,8 +491,40 @@ function showRegionDetails(regionId) {
   const region = regionStore[regionId];
   if (!region) return;
 
+  // Ensure rectangle layer is added to map
+  if (!map.hasLayer(rectangleLayerGroup)) {
+    map.addLayer(rectangleLayerGroup);
+  }
+
+  // Hide previously selected region's bounding box
+  if (currentSelectedRegion && currentSelectedRegion !== regionId) {
+    const prevRegion = regionStore[currentSelectedRegion];
+    if (prevRegion && prevRegion.rectangle) {
+      prevRegion.rectangle.setStyle({
+        opacity: 0,
+        fillOpacity: 0
+      });
+    }
+  }
+
+  // Show current region's bounding box
+  if (region.rectangle) {
+    region.rectangle.setStyle({
+      opacity: 0.8,
+      fillOpacity: 0.15
+    });
+  }
+
+  // Set current selected region
+  currentSelectedRegion = regionId;
+
   // Find all messages within this region's bounds (including sub-regions)
   const messagesInRegion = findMessagesInRegion(region.bounds);
+  
+  // Categorize messages for better understanding
+  const directMessages = region.messages || [];
+  const totalMessages = messagesInRegion.length;
+  const additionalMessages = totalMessages - directMessages.length;
   
   // Get unique channels from all messages
   const channels = [...new Set(messagesInRegion.map(msg => msg.channel))];
@@ -478,35 +535,61 @@ function showRegionDetails(regionId) {
     <div class="region-details">
       <div class="region-info">
         <strong>Region:</strong> ${region.name}<br>
-        <strong>Total Messages:</strong> ${messagesInRegion.length}<br>
-        <strong>Channels:</strong> ${channels.join(', ')}<br>
-        <strong>Coordinates:</strong> ${region.center[0].toFixed(4)}, ${region.center[1].toFixed(4)}<br>
-        <strong>Coverage:</strong> ${((region.bounds.north - region.bounds.south) * 111).toFixed(1)}km × ${((region.bounds.east - region.bounds.west) * 111 * Math.cos(region.center[0] * Math.PI / 180)).toFixed(1)}km
+        <strong>Messages about this region:</strong> ${directMessages.length}<br>
+        <strong>Messages from areas within:</strong> ${additionalMessages}<br>
+        <strong>Total Messages:</strong> ${totalMessages}<br>
+        <strong>Channels:</strong> ${channels.join(', ')}
       </div>
       <div class="region-messages">
-        <h4>Messages in this region (showing most recent first):</h4>
+        <h4>All messages in this region (showing most recent first):</h4>
   `;
   
   if (messagesInRegion.length === 0) {
     content += '<p>No messages found in this region.</p>';
   } else {
-    messagesInRegion.slice(0, 15).forEach((msg, index) => {
+    messagesInRegion.slice(0, 20).forEach((msg, index) => {
       const date = new Date(msg.date).toLocaleString();
       const relativeDate = getRelativeTime(msg.date);
+      
+      // Determine if this is a direct message or contained message
+      const isDirect = directMessages.some(dm => 
+        dm.id === msg.id || (dm.text === msg.text && dm.date === msg.date)
+      );
+      
+      const messageType = isDirect ? 'region' : 'sub-area';
+      const borderColor = isDirect ? '#ff6b35' : '#10b981';
+      const typeLabel = isDirect ? 'About Region' : 'Within Area';
+      
+      // Create clickable location links
+      const locationLinks = (msg.locations || []).map(location => {
+        const locationKey = location.trim().toLowerCase();
+        const coord = locationCache[locationKey];
+        
+        if (coord && coord !== null) {
+          return `<span class="clickable-location" onclick="goToLocation('${location}')">${location}</span>`;
+        } else {
+          return location; // Non-clickable if no coordinates
+        }
+      }).join(', ');
+      
       content += `
-        <div class="message-item" style="margin-bottom: 10px; padding: 8px; border-left: 3px solid #ff6b35; background: #f9f9f9;">
+        <div class="message-item" style="margin-bottom: 10px; padding: 8px; border-left: 3px solid ${borderColor}; background: #f9f9f9;">
+          <div class="message-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <span class="message-type" style="font-size: 0.7em; background: ${borderColor}; color: white; padding: 2px 6px; border-radius: 10px; font-weight: bold;">${typeLabel}</span>
+            <span class="message-time" style="font-size: 0.7em; color: #666;">${relativeDate}</span>
+          </div>
           <div class="message-text" style="font-size: 0.9em; margin-bottom: 4px;">${msg.cleaned_text || msg.text}</div>
           <div class="message-meta" style="font-size: 0.8em; color: #666;">
             <strong>Channel:</strong> ${msg.channel} | 
-            <strong>Date:</strong> ${relativeDate} (${date})
-            ${msg.locations ? ` | <strong>Locations:</strong> ${msg.locations.join(', ')}` : ''}
+            <strong>Date:</strong> ${date}
+            ${locationLinks ? ` | <strong>Locations:</strong> ${locationLinks}` : ''}
           </div>
         </div>
       `;
     });
     
-    if (messagesInRegion.length > 15) {
-      content += `<p style="color: #666; font-style: italic;">... and ${messagesInRegion.length - 15} more messages</p>`;
+    if (messagesInRegion.length > 20) {
+      content += `<p style="color: #666; font-style: italic;">... and ${messagesInRegion.length - 20} more messages</p>`;
     }
   }
   
@@ -514,6 +597,28 @@ function showRegionDetails(regionId) {
   
   document.getElementById('details-content').innerHTML = content;
   document.getElementById('details').style.display = 'block';
+}
+
+function closeDetails() {
+  // Hide the details panel
+  document.getElementById('details').style.display = 'none';
+  
+  // Hide the currently selected region's bounding box
+  if (currentSelectedRegion) {
+    const region = regionStore[currentSelectedRegion];
+    if (region && region.rectangle) {
+      region.rectangle.setStyle({
+        opacity: 0,
+        fillOpacity: 0
+      });
+    }
+    currentSelectedRegion = null;
+    
+    // Remove rectangle layer when no region is selected
+    if (map.hasLayer(rectangleLayerGroup)) {
+      map.removeLayer(rectangleLayerGroup);
+    }
+  }
 }
 
 function getRelativeTime(dateString) {
@@ -537,12 +642,18 @@ function getRelativeTime(dateString) {
 
 function findMessagesInRegion(regionBounds) {
   const messagesInRegion = [];
+  const addedMessages = new Set(); // Track messages to avoid duplicates
   
-  // Check all stored messages
-  Object.values(messageStore).forEach(msg => {
-    if (!msg.locations) return;
+  // Check ALL messages from the dataset, not just messageStore
+  allMessages.forEach(msg => {
+    if (!msg.locations || msg.locations.length === 0) return;
+    
+    let messageIncluded = false;
     
     msg.locations.forEach(location => {
+      // Skip if we already added this message
+      if (messageIncluded) return;
+      
       const locationKey = location.trim().toLowerCase();
       const coord = locationCache[locationKey];
       
@@ -550,32 +661,56 @@ function findMessagesInRegion(regionBounds) {
       
       // Check if this location is within the region bounds
       if (isLocationInBounds(coord, regionBounds)) {
-        // Avoid duplicates
-        if (!messagesInRegion.find(m => m.id === msg.id || (m.text === msg.text && m.date === msg.date))) {
+        // Create unique identifier for message
+        const messageId = msg.id || `${msg.text}_${msg.date}_${msg.channel}`;
+        
+        if (!addedMessages.has(messageId)) {
           messagesInRegion.push(msg);
+          addedMessages.add(messageId);
+          messageIncluded = true;
         }
       }
     });
   });
   
+  console.log(`Found ${messagesInRegion.length} messages in region bounds:`, regionBounds);
+  
   return messagesInRegion.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 function isLocationInBounds(coord, bounds) {
-  // Handle point coordinates
+  // Handle point coordinates (individual markers)
   if (coord.lat !== undefined && coord.lon !== undefined) {
-    return coord.lat >= bounds.south && coord.lat <= bounds.north &&
-           coord.lon >= bounds.west && coord.lon <= bounds.east;
+    const withinBounds = coord.lat >= bounds.south && coord.lat <= bounds.north &&
+                        coord.lon >= bounds.west && coord.lon <= bounds.east;
+    
+    if (withinBounds) {
+      console.log(`Point location [${coord.lat}, ${coord.lon}] is within bounds:`, bounds);
+    }
+    
+    return withinBounds;
   }
   
   // Handle bounding box coordinates (sub-regions)
   if (coord.north !== undefined && coord.south !== undefined && 
       coord.east !== undefined && coord.west !== undefined) {
+    
     // Check if the sub-region overlaps with the main region
-    return !(coord.south > bounds.north || coord.north < bounds.south ||
-             coord.west > bounds.east || coord.east < bounds.west);
+    // Two rectangles overlap if they don't NOT overlap
+    const overlaps = !(coord.south > bounds.north || coord.north < bounds.south ||
+                      coord.west > bounds.east || coord.east < bounds.west);
+    
+    if (overlaps) {
+      console.log(`Sub-region overlaps with main region:`, {
+        subRegion: coord,
+        mainRegion: bounds
+      });
+    }
+    
+    return overlaps;
   }
   
+  console.warn('Invalid coordinate format:', coord);
   return false;
 }
 
