@@ -467,6 +467,16 @@ function showRegionDetails(regionId) {
   // Set current selected region
   currentSelectedRegion = regionId;
 
+  // Auto-zoom to fit the region bounds
+  const regionBounds = [
+    [region.bounds.south, region.bounds.west], // Southwest corner
+    [region.bounds.north, region.bounds.east]  // Northeast corner
+  ];
+  map.fitBounds(regionBounds, { 
+    padding: [20, 20],
+    maxZoom: 15 // Don't zoom in too much for very small regions
+  });
+
   // Find all messages within this region's bounds (including sub-regions)
   const messagesInRegion = findMessagesInRegion(region.bounds);
   
@@ -641,23 +651,25 @@ function isLocationInBounds(coord, bounds) {
     return withinBounds;
   }
   
-  // Handle bounding box coordinates (sub-regions)
+  // Handle bounding box coordinates (sub-regions) - STRICT containment only
   if (coord.north !== undefined && coord.south !== undefined && 
       coord.east !== undefined && coord.west !== undefined) {
     
-    // Check if the sub-region overlaps with the main region
-    // Two rectangles overlap if they don't NOT overlap
-    const overlaps = !(coord.south > bounds.north || coord.north < bounds.south ||
-                      coord.west > bounds.east || coord.east < bounds.west);
+    // Check if the sub-region is COMPLETELY contained within the main region
+    // Sub-region must be entirely inside, not just overlapping
+    const completelyContained = coord.south >= bounds.south && 
+                               coord.north <= bounds.north &&
+                               coord.west >= bounds.west && 
+                               coord.east <= bounds.east;
     
-    if (overlaps) {
-      console.log(`Sub-region overlaps with main region:`, {
+    if (completelyContained) {
+      console.log(`Sub-region completely contained within main region:`, {
         subRegion: coord,
         mainRegion: bounds
       });
     }
     
-    return overlaps;
+    return completelyContained;
   }
   
   console.warn('Invalid coordinate format:', coord);
