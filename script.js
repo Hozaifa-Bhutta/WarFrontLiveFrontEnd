@@ -128,15 +128,27 @@ async function initMap() {
     // Initialize filter inputs to min/max dates from data
     initDateFilterInputs(allMessages);
 
-    // Show all markers initially
-    refreshMarkers(allMessages);
+    // Apply initial date filter (last 3 days)
+    const startDateValue = document.getElementById('start-date').value;
+    const endDateValue = document.getElementById('end-date').value;
+    const startDate = new Date(startDateValue);
+    const endDate = new Date(endDateValue);
+    
+    // Filter messages to last 3 days by default
+    const filteredMessages = allMessages.filter(m => {
+      const d = new Date(m.date);
+      return d >= startDate && d <= endDate;
+    });
+
+    // Show filtered markers initially
+    refreshMarkers(filteredMessages);
     
     // Initialize events data
     initEventsData(allMessages);
     
-    // Pre-render events timeline if we have data
-    if (allMessages.length > 0) {
-      filteredEventsMessages = [...allMessages].sort((a, b) => new Date(b.date) - new Date(a.date));
+    // Pre-render events timeline with filtered data (last 3 days)
+    if (filteredMessages.length > 0) {
+      filteredEventsMessages = [...filteredMessages].sort((a, b) => new Date(b.date) - new Date(a.date));
       renderEventsTimeline(filteredEventsMessages);
       updateEventsStats(filteredEventsMessages);
     }
@@ -173,7 +185,14 @@ function initDateFilterInputs(messages) {
   const maxDate = new Date(Math.max(...dates));
   const toDateInputValue = d => d.toISOString().split('T')[0];
 
-  document.getElementById('start-date').value = toDateInputValue(minDate);
+  // Calculate 3 days ago from the latest date
+  const threeDaysAgo = new Date(maxDate);
+  threeDaysAgo.setDate(maxDate.getDate() - 3);
+  
+  // Use the later of: (3 days ago) or (earliest message date)
+  const startDate = threeDaysAgo > minDate ? threeDaysAgo : minDate;
+
+  document.getElementById('start-date').value = toDateInputValue(startDate);
   document.getElementById('start-date').min = toDateInputValue(minDate);
   document.getElementById('start-date').max = toDateInputValue(maxDate);
 
