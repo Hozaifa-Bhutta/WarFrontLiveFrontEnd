@@ -54,9 +54,6 @@ async function initMap() {
   // map.addLayer(rectangleLayerGroup); // Always add rectangle layer for bounding boxes
   map.addLayer(regionMarkersGroup);
 
-  // Add zoom event listener for dynamic region visibility
-  map.on('zoomend', updateRegionVisibility);
-  
   // Add click handler to hide bounding box when clicking elsewhere on map
   map.on('click', function(e) {
     // Only hide if we didn't click on a marker
@@ -82,13 +79,51 @@ async function initMap() {
     if (!cacheRes.ok) throw new Error('Failed to load cache: ' + cacheRes.statusText);
     
     allMessages = await messagesRes.json();
-    locationCache = await cacheRes.json();
+    const rawLocationCache = await cacheRes.json();
+    
+    // Normalize location cache keys to lowercase for consistent lookup
+    locationCache = {};
+    Object.keys(rawLocationCache).forEach(key => {
+      const normalizedKey = key.trim().toLowerCase();
+      locationCache[normalizedKey] = rawLocationCache[key];
+      console.log(`Normalizing cache key: "${key}" -> "${normalizedKey}"`);
+    });
+    
+    console.log('Final location cache keys:', Object.keys(locationCache));
     
     // Debug: Log data info to console
     console.log(`Loaded ${allMessages.length} messages`);
     console.log(`Loaded ${Object.keys(locationCache).length} cached locations`);
     console.log('Sample message:', allMessages[0]);
     console.log('Sample cache entry:', Object.entries(locationCache)[0]);
+    console.log('All location cache keys (first 20):', Object.keys(locationCache).slice(0, 20));
+    
+    // Debug: Show what locations are mentioned in messages vs what's in cache
+    const allMessageLocations = new Set();
+    allMessages.forEach(msg => {
+      if (msg.locations) {
+        msg.locations.forEach(loc => {
+          allMessageLocations.add(loc.trim().toLowerCase());
+        });
+      }
+    });
+    console.log('Unique locations mentioned in messages (first 20):', Array.from(allMessageLocations).slice(0, 20));
+    console.log('Cache keys (first 20):', Object.keys(locationCache).slice(0, 20));
+    
+    // Find which message locations have cache matches
+    const matchedLocations = [];
+    const unmatchedLocations = [];
+    allMessageLocations.forEach(msgLoc => {
+      if (locationCache[msgLoc]) {
+        matchedLocations.push(msgLoc);
+      } else {
+        unmatchedLocations.push(msgLoc);
+      }
+    });
+    console.log('Matched locations:', matchedLocations);
+    console.log('Unmatched locations:', unmatchedLocations);
+    
+
 
     // Initialize filter inputs to min/max dates from data
     initDateFilterInputs(allMessages);
@@ -212,100 +247,6 @@ function onLayerToggle() {
   }
 }
 
-// Update region visibility based on zoom level and size
-function updateRegionVisibility() {
-  if (!map.hasLayer(rectangleLayerGroup)) return;
-  
-  const currentZoom = map.getZoom();
-  const bounds = map.getBounds();
-  const viewportLatSpan = bounds.getNorth() - bounds.getSouth();
-  const viewportLonSpan = bounds.getEast() - bounds.getWest();
-  
-  // Collect all rectangles with their sizes for sorting
-  const rectanglesWithSize = [];
-  
-  rectangleLayerGroup.eachLayer(layer => {
-    if (layer instanceof L.Rectangle) {
-      const layerBounds = layer.getBounds();
-      const latSpan = layerBounds.getNorth() - layerBounds.getSouth();
-      const lonSpan = layerBounds.getEast() - layerBounds.getWest();
-      const area = latSpan * lonSpan;
-      
-      // Calculate relative size compared to viewport
-      const relativeLatSize = latSpan / viewportLatSpan;
-      const relativeLonSize = lonSpan / viewportLonSpan;
-      const relativeArea = relativeLatSize * relativeLonSize;
-      
-      rectanglesWithSize.push({
-        layer: layer,
-        area: area,
-        relativeArea: relativeArea,
-        latSpan: latSpan,
-        lonSpan: lonSpan
-      });
-    }
-  });
-  
-  // Sort by area (smallest first) for proper z-index ordering
-  rectanglesWithSize.sort((a, b) => a.area - b.area);
-  
-  // Apply visibility rules and z-index ordering
-  rectanglesWithSize.forEach((item, index) => {
-    const { layer, relativeArea, latSpan, lonSpan } = item;
-    let shouldShow = true;
-    
-    // Hide regions that are too small when zoomed out
-    if (currentZoom < 9) {
-      // At very low zoom, hide very small regions
-      if (latSpan < 0.1 || lonSpan < 0.1) {
-        shouldShow = false;
-      }
-    } else if (currentZoom < 11) {
-      // At low zoom, hide small regions
-      if (latSpan < 0.05 || lonSpan < 0.05) {
-        shouldShow = false;
-      }
-    } else if (currentZoom < 13) {
-      // At medium zoom, hide tiny regions
-      if (latSpan < 0.01 || lonSpan < 0.01) {
-        shouldShow = false;
-      }
-    }
-    
-    // Hide regions that are too big when zoomed in
-    if (currentZoom > 13) {
-      // At high zoom, hide regions that take up too much of the viewport
-      if (relativeArea > 0.4) {
-        shouldShow = false;
-      }
-    } else if (currentZoom > 11) {
-      // At medium-high zoom, hide very large regions
-      if (relativeArea > 0.6) {
-        shouldShow = false;
-      }
-    }
-    
-    // Set visibility and z-index
-    if (shouldShow) {
-      layer.setStyle({ 
-        fillOpacity: 0.2, 
-        opacity: 0.8
-      });
-      // Bring smaller regions to front (they have lower index after sorting)
-      if (index < rectanglesWithSize.length / 2) {
-        layer.bringToFront();
-      } else {
-        layer.bringToBack();
-      }
-    } else {
-      layer.setStyle({ 
-        fillOpacity: 0, 
-        opacity: 0 
-      });
-    }
-  });
-}
-
 // Clear and redraw markers and regions for given messages
 function refreshMarkers(messages) {
   markerClusterGroup.clearLayers();
@@ -334,20 +275,28 @@ function refreshMarkers(messages) {
         return;
       }
       
+      console.log(`Looking up location: "${location}" -> normalized key: "${locationKey}"`);
       const coord = locationCache[locationKey];
+      console.log(`Found coordinate:`, coord);
       
       if (coord && coord !== null) {
         addLocationToMap(coord, msg, location);
       } else if (coord === null) {
         console.warn(`Location "${location}" explicitly set to null in cache (geocoding failed)`);
       } else {
-        console.warn(`Location "${location}" not found in cache`);
+        console.warn(`Location "${location}" not found in cache. Looking for key: "${locationKey}"`);
+        // Debug: Show all available keys for comparison
+        console.log(`Available cache keys:`, Object.keys(locationCache));
+        // Debug: Show similar keys for troubleshooting
+        const similarKeys = Object.keys(locationCache).filter(key => 
+          key.includes(locationKey.split(' ')[0]) || locationKey.includes(key.split(' ')[0])
+        );
+        if (similarKeys.length > 0) {
+          console.log(`Similar keys found:`, similarKeys);
+        }
       }
     });
   });
-  
-  // Don't update region visibility for rectangles - we handle them manually now
-  // updateRegionVisibility();
 }
 
 function addLocationToMap(coord, msg, locationName) {
@@ -434,9 +383,9 @@ function addLocationToMap(coord, msg, locationName) {
       const rectangle = L.rectangle(bounds, {
         color: '#ff6b35',
         weight: 3,
-        opacity: 0, // Hidden by default
+        opacity: 0, // Start hidden
         fillColor: '#ff6b35',
-        fillOpacity: 0 // Hidden by default
+        fillOpacity: 0 // Start hidden
       });
       
       // Store reference to rectangle in region data
@@ -496,18 +445,18 @@ function showRegionDetails(regionId) {
     map.addLayer(rectangleLayerGroup);
   }
 
-  // Hide previously selected region's bounding box
-  if (currentSelectedRegion && currentSelectedRegion !== regionId) {
-    const prevRegion = regionStore[currentSelectedRegion];
-    if (prevRegion && prevRegion.rectangle) {
-      prevRegion.rectangle.setStyle({
+  // Hide ALL region bounding boxes first
+  Object.keys(regionStore).forEach(id => {
+    const regionData = regionStore[id];
+    if (regionData && regionData.rectangle) {
+      regionData.rectangle.setStyle({
         opacity: 0,
         fillOpacity: 0
       });
     }
-  }
+  });
 
-  // Show current region's bounding box
+  // Show ONLY the current region's bounding box
   if (region.rectangle) {
     region.rectangle.setStyle({
       opacity: 0.8,
@@ -603,21 +552,22 @@ function closeDetails() {
   // Hide the details panel
   document.getElementById('details').style.display = 'none';
   
-  // Hide the currently selected region's bounding box
-  if (currentSelectedRegion) {
-    const region = regionStore[currentSelectedRegion];
-    if (region && region.rectangle) {
-      region.rectangle.setStyle({
+  // Hide ALL region bounding boxes
+  Object.keys(regionStore).forEach(id => {
+    const regionData = regionStore[id];
+    if (regionData && regionData.rectangle) {
+      regionData.rectangle.setStyle({
         opacity: 0,
         fillOpacity: 0
       });
     }
-    currentSelectedRegion = null;
-    
-    // Remove rectangle layer when no region is selected
-    if (map.hasLayer(rectangleLayerGroup)) {
-      map.removeLayer(rectangleLayerGroup);
-    }
+  });
+  
+  currentSelectedRegion = null;
+  
+  // Remove rectangle layer when no region is selected
+  if (map.hasLayer(rectangleLayerGroup)) {
+    map.removeLayer(rectangleLayerGroup);
   }
 }
 
